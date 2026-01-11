@@ -1,0 +1,15 @@
+version: "3.9"
+services:
+  db:
+    image: postgres:16
+    container_name: proofvault_db
+    environment:
+      POSTGRES_USER: proofvault
+      POSTGRES_PASSWORD: proofvault
+      POSTGRES_DB: proofvault
+    ports:
+      - "5432:5432"
+    volumes:
+      - proofvault_pg:/var/lib/postgresql/data
+volumes:
+  proofvault_pg:

@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  student
+  admin
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  role      Role
+  createdAt DateTime @default(now())
+}
+
+model Policy {
+  id        String   @id @default(cuid())
+  role      Role     @unique
+  // Authorized schema snapshot / entitlements (JSON for now)
+  allowed   Json
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  workflowId String
+  userId     String
+  prompt     String
+  sql        String
+  resultHash String
+  receiptId  String   @unique
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([workflowId])
+}
+
+model ToolRegistry {
+  id        String   @id @default(cuid())
+  toolName  String   @unique
+  sha256    String
+  createdAt DateTime @default(now())
+}
