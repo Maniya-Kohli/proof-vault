@@ -1,25 +1,29 @@
 import { Injectable } from '@nestjs/common';
 import type { AuthorizedSchemas } from '../policy/policy.service';
 
+export type Decision = 'SAFE' | 'NEEDS_APPROVAL' | 'BLOCKED';
+
 export type LintResult = {
   ok: boolean;
-  reason?: string;
-  sanitizedSql?: string;
+  decision: Decision;
   risk: 'safe' | 'needs_review' | 'blocked';
+  sanitizedSql?: string;
+  tablesUsed: string[];
+  reasons: string[];
 };
 
 @Injectable()
 export class SqlLinterService {
-  /**
-   * MVP linter (fintech-ready):
-   * - single statement only
-   * - SELECT only
-   * - blocks write/DDL keywords
-   * - extracts schema-qualified tables from FROM/JOIN
-   * - blocks out-of-scope tables (based on PolicyService authorized schemas)
-   * - adds LIMIT 100 if missing (marks needs_review)
-   */
   lintAndSanitize(sql: string, authorized: AuthorizedSchemas): LintResult {
+    const base = (overrides: Partial<LintResult>): LintResult => ({
+      ok: false,
+      decision: 'BLOCKED',
+      risk: 'blocked',
+      tablesUsed: [],
+      reasons: [],
+      ...overrides,
+    });
+
     const normalized = sql.trim().replace(/;+/g, ';');
     const statements = normalized
       .split(';')
@@ -27,70 +31,80 @@ export class SqlLinterService {
       .filter(Boolean);
 
     if (statements.length !== 1) {
-      return { ok: false, reason: 'Multi-statement SQL is not allowed', risk: 'blocked' };
+      return base({ reasons: ['multi_statement_not_allowed'] });
     }
 
     const stmt = statements[0];
-    const s = stmt.toLowerCase();
+    const lower = stmt.toLowerCase();
 
+    // ✅ Use whole-word matching so "created_at" doesn't trigger "create"
     const forbidden = ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'truncate', 'grant', 'revoke'];
-    if (forbidden.some((k) => s.includes(k))) {
-      return { ok: false, reason: 'Write/DDL operations are blocked', risk: 'blocked' };
+    for (const k of forbidden) {
+      const re = new RegExp(`\\b${k}\\b`, 'i');
+      if (re.test(stmt)) {
+        return base({ reasons: ['write_or_ddl_blocked'], tablesUsed: extractTables(stmt) });
+      }
     }
 
-    if (!s.startsWith('select')) {
-      return { ok: false, reason: 'Only SELECT queries are allowed', risk: 'blocked' };
+    if (!lower.startsWith('select')) {
+      return base({ reasons: ['only_select_allowed'], tablesUsed: extractTables(stmt) });
     }
 
-    // Allowed tables come from Policy (prefer schema-qualified names)
     const allowedTables = new Set(
       authorized.databases.flatMap((db) => db.tables.map((t) => normalizeIdent(t.name))),
     );
 
-    // Extract referenced tables (schema.table) from FROM and JOIN
-    const referenced = extractTables(stmt).map(normalizeIdent);
+    const referencedRaw = extractTables(stmt);
+    const referenced = referencedRaw.map(normalizeIdent);
 
-    // If user writes unqualified table (e.g. "transactions"), block.
     const unqualified = referenced.filter((t) => !t.includes('.'));
     if (unqualified.length) {
-      return {
-        ok: false,
-        reason: `Use schema-qualified table names. Unqualified: ${unqualified.join(', ')}`,
-        risk: 'blocked',
-      };
+      return base({
+        tablesUsed: referencedRaw,
+        reasons: [`unqualified_tables:${unqualified.join(',')}`],
+      });
     }
 
-    const violations = referenced.filter((t) => !allowedTables.has(normalizeIdent(t)));
+    const violations = referenced.filter((t) => !allowedTables.has(t));
     if (violations.length) {
-      return { ok: false, reason: `Out-of-scope table(s): ${violations.join(', ')}`, risk: 'blocked' };
+      return base({
+        tablesUsed: referencedRaw,
+        reasons: [`out_of_scope_tables:${violations.join(',')}`],
+      });
     }
 
+    const reasons: string[] = [];
+    const touchesSensitive = referenced.some(
+      (t) => t.startsWith('kyc_private.') || t.startsWith('risk_private.'),
+    );
+    if (touchesSensitive) reasons.push('touches_sensitive_schema');
+
+    let sanitized = stmt;
     if (!/\blimit\b/i.test(stmt)) {
-      return { ok: true, sanitizedSql: stmt + ' LIMIT 100', risk: 'needs_review' };
+      sanitized = stmt + ' LIMIT 100';
+      reasons.push('limit_added');
     }
 
-    return { ok: true, sanitizedSql: stmt, risk: 'safe' };
+    const needsApproval = touchesSensitive || reasons.includes('limit_added');
+
+    return {
+      ok: true,
+      decision: needsApproval ? 'NEEDS_APPROVAL' : 'SAFE',
+      risk: needsApproval ? 'needs_review' : 'safe',
+      sanitizedSql: sanitized,
+      tablesUsed: referencedRaw,
+      reasons,
+    };
   }
 }
 
-/**
- * Extracts table references in FROM/JOIN clauses.
- * Supports:
- *   FROM schema.table
- *   JOIN schema.table
- *   FROM "schema"."table"
- *   JOIN "schema".table
- * Ignores aliases.
- */
 function extractTables(sql: string): string[] {
   const out: string[] = [];
   const re =
     /\b(from|join)\s+((?:"?[a-zA-Z_][\w]*"?\.)?"?[a-zA-Z_][\w]*"?)(?:\s+as\s+\w+|\s+\w+)?/gi;
 
   let m: RegExpExecArray | null;
-  while ((m = re.exec(sql)) !== null) {
-    out.push(m[2]);
-  }
+  while ((m = re.exec(sql)) !== null) out.push(m[2]);
   return Array.from(new Set(out));
 }
 

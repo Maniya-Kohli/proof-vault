@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "AuditLog" ADD COLUMN     "eventType" TEXT NOT NULL DEFAULT 'EXECUTED';

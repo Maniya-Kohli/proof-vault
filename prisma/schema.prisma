@@ -28,6 +28,7 @@ model Policy {
 }
 
 model AuditLog {
+  eventType  String   @default("EXECUTED")
   id         String   @id @default(cuid())
   workflowId String
   userId     String

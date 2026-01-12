@@ -1,18 +1,23 @@
 import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { AuthGuard } from '@nestjs/passport';
 import { OrchestratorService } from './orchestrator.service';
-import { AgentQueryDto } from './dto/query.dto';
+import { QueryDto } from './dto/query.dto';
 
 @Controller('agent')
 export class OrchestratorController {
   constructor(private readonly orchestrator: OrchestratorService) {}
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(AuthGuard('jwt'))
   @Post('query')
-  async query(@Req() req: any, @Body() dto: AgentQueryDto) {
+  async query(@Req() req: any, @Body() body: QueryDto) {
+    const authHeader: string = req.headers?.authorization ?? '';
+    const sessionToken = authHeader.replace(/^Bearer\s+/i, '');
+
     return this.orchestrator.handleQuery({
+      sessionToken,
       session: req.user,
-      prompt: dto.prompt,
+      prompt: body.prompt,
+      approved: body.approved === true,
     });
   }
 }

@@ -12,6 +12,8 @@ import { ScrubModule } from './scrub/scrub.module';
 import { AuditModule } from './audit/audit.module';
 import { RunnerModule } from './runner/runner.module';
 import { PlannerModule } from './planner/planner.module';
+import { McpModule } from './mcp/mcp.module';
+import { ExecutionModule } from './execution/execution.module';
 
 @Module({
   imports: [
@@ -25,6 +27,8 @@ import { PlannerModule } from './planner/planner.module';
     AuditModule,
     RunnerModule,
     PlannerModule,
+    McpModule,
+    ExecutionModule,
   ],
   controllers: [AppController],
   providers: [AppService],
